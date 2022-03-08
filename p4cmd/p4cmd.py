@@ -14,7 +14,7 @@ MAX_ARG_LEN = 8000  # max length of args string when combined, close to max, but
 
 
 class P4Client(object):
-    def __init__(self, perforce_root, user=None, client=None, server=None, silent=True):
+    def __init__(self, perforce_root, user=None, client=None, server=None, silent=True, set_from_config=False):
         """
         Make a new P4Client
 
@@ -24,6 +24,8 @@ class P4Client(object):
         :param silent: *bool* if True, suppresses error messages to cut down on terminal spam
         """
         self.perforce_root = perforce_root
+        self.p4_config = None
+        self.p4_config_data = None
 
         self.user = user
         self.client = client
@@ -31,17 +33,20 @@ class P4Client(object):
 
         if not self.__p4config_exists():
             logging.warning("No .p4config file found in %s!" % self.perforce_root)
+        else:
+            if set_from_config:
+                self.p4_config_data = self.get_settings_from_p4_config()
 
         if user is None:
-            self.user = self.get_p4_setting("P4USER")
+            self.user = self.get_p4_setting("P4USER") if not set_from_config else self.p4_config_data.get('P4USER', None)
             if self.user is None:
                 raise p4errors.WorkSpaceError("Could not find P4USER")
         if client is None:
-            self.client = self.find_p4_client()
+            self.client = self.find_p4_client() if not set_from_config else self.p4_config_data.get('P4CLIENT', None)
             if self.client is None:
                 raise p4errors.WorkSpaceError("Could not find P4CLIENT")
         if server is None:
-            self.server = self.get_p4_setting("P4PORT")
+            self.server = self.get_p4_setting("P4PORT") if not set_from_config else self.p4_config_data.get('P4PORT', None)
             if self.server is None:
                 raise p4errors.WorkSpaceError("Could not find P4PORT")
 
@@ -403,7 +408,7 @@ class P4Client(object):
 
         return files_and_cl
 
-    def add_or_edit_files(self, file_list=[], changelist="default"):
+    def add_or_edit_files(self, file_list, changelist="default"):
         """
         Marks the files in file_list for add if they are new, or edit if they are already versioned
 
@@ -414,6 +419,10 @@ class P4Client(object):
         files_for_add = []
         files_for_checkout = []
         all_info_dicts = []
+
+        # Should not use a mutable type as a default argument
+        if not isinstance(file_list, list):
+            file_list = [file_list]
 
         p4files = self.files_to_p4files(file_list, allow_invalid_files=True)
         for p4file in p4files:
@@ -722,11 +731,31 @@ class P4Client(object):
         while last_dir != current_dir:
             for item in os.listdir(current_dir):
                 if item == ".p4config":
+                    self.p4_config = os.path.join(current_dir, '.p4config').replace('\\', '/')
                     logging.info(".p4config found in %s" % current_dir)
                     return True
             last_dir = current_dir
             current_dir = os.path.abspath(current_dir + os.path.sep + os.pardir)
         return False
+
+
+    def get_settings_from_p4_config(self):
+        """
+        Gets the data from a p4config file in the root of the depot and returns a dict with the data
+        {
+          P4PORT   : '',
+          P4USER   : '',
+          P4CLIENT : ''
+        }
+        :return: p4config data dict
+        """
+        cfg_data = dict()
+        with open(self.p4_config, 'r') as cfg:
+            for line in cfg:
+                line = line.strip()
+                split_line = line.split('=')
+                cfg_data.update({split_line[0]:split_line[1]})
+        return cfg_data
 
 
 def split_list_into_strings_of_length(input_list, max_length=100):
